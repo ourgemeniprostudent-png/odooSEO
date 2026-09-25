@@ -1,5 +1,5 @@
 // کارنامه — native macOS shell that lives at the camera notch.
-// Collapsed: a small black strip hugging the notch. Click it and the panel drops down with the app;
+// Collapsed: a small plain jade button right beside the notch. Click it and the panel drops down;
 // the «جمع کردن» button at the bottom slides it back up. Also starts the local Python server.
 // Built on the user's Mac by install-mac.command with:  swiftc -O -o Karnama Karnama.swift
 
@@ -16,6 +16,8 @@ let supportDir = FileManager.default.homeDirectoryForCurrentUser
 final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    // macOS pushes windows below the menu bar by default; we need to sit in the notch row.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
 }
 
 // A view whose clicks fall through to a handler (the whole collapsed strip is one button).
@@ -29,15 +31,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     var panel: NotchPanel!
     var root: NSView!
     var topStrip: ClickView!
-    var iconView: NSImageView!
-    var titleLabel: NSTextField!
     var webView: WKWebView!
     var footer: NSView!
     var server: Process?
     var expanded = false
     var animating = false
 
-    let earWidth: CGFloat = 70          // black area on each side of the notch when collapsed
+    let buttonWidth: CGFloat = 34       // the collapsed jade button
     let expandedWidth: CGFloat = 520
     let footerHeight: CGFloat = 44
 
@@ -91,12 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         return (menuBar > 0 ? menuBar : 24, 0)
     }
 
+    /// Small jade button in the notch row: just right of the notch, or top centre without a notch.
     func collapsedFrame() -> NSRect {
         let screen = targetScreen()
         let notch = notchSize(screen)
-        let width = max(notch.width, 90) + earWidth * 2
-        return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - notch.height,
-                      width: width, height: notch.height)
+        let height = max(14, min(20, notch.height - 12))
+        let x = notch.width > 0 ? screen.frame.midX + notch.width / 2 + 8 : screen.frame.midX - buttonWidth / 2
+        let y = screen.frame.maxY - notch.height / 2 - height / 2
+        return NSRect(x: x, y: y, width: buttonWidth, height: height)
     }
 
     func expandedFrame() -> NSRect {
@@ -122,39 +124,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
         root = NSView(frame: NSRect(origin: .zero, size: frame.size))
         root.wantsLayer = true
-        root.layer?.backgroundColor = NSColor.black.cgColor
-        root.layer?.cornerRadius = 12
-        root.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]   // bottom corners
         root.layer?.masksToBounds = true
         panel.contentView = root
 
-        // Top strip: the part that sits beside the notch. Icon on the left ear, name on the right.
-        let stripHeight = frame.height
-        topStrip = ClickView(frame: NSRect(x: 0, y: 0, width: frame.width, height: stripHeight))
-        topStrip.autoresizingMask = [.width, .minYMargin]
+        // Click target: the whole button while collapsed, the black band under the notch when open.
+        topStrip = ClickView(frame: root.bounds)
+        topStrip.autoresizingMask = [.width, .height]
+        topStrip.toolTip = "کارنامه"
         topStrip.onClick = { [weak self] in
             guard let self = self else { return }
             self.setExpanded(!self.expanded)
         }
         root.addSubview(topStrip)
-
-        let iconSize = min(stripHeight - 8, 22)
-        iconView = NSImageView(frame: NSRect(x: 18, y: (stripHeight - iconSize) / 2, width: iconSize, height: iconSize))
-        iconView.image = NSApp.applicationIconImage
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.autoresizingMask = [.maxXMargin]
-        topStrip.addSubview(iconView)
-
-        titleLabel = NSTextField(labelWithString: "کارنامه")
-        titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        titleLabel.textColor = NSColor(red: 0.55, green: 0.9, blue: 0.76, alpha: 1)
-        titleLabel.alignment = .right
-        titleLabel.sizeToFit()
-        let labelWidth = titleLabel.frame.width + 4
-        titleLabel.frame = NSRect(x: frame.width - labelWidth - 16, y: (stripHeight - titleLabel.frame.height) / 2,
-                                  width: labelWidth, height: titleLabel.frame.height)
-        titleLabel.autoresizingMask = [.minXMargin]
-        topStrip.addSubview(titleLabel)
+        applyLook(expanded: false)
 
         // Web content (hidden while collapsed).
         let config = WKWebViewConfiguration()
@@ -183,9 +165,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         panel.orderFrontRegardless()
     }
 
+    /// Collapsed: plain jade pill. Open: black panel growing out of the notch.
+    func applyLook(expanded open: Bool) {
+        guard let layer = root.layer else { return }
+        if open {
+            layer.backgroundColor = NSColor.black.cgColor
+            layer.cornerRadius = 22
+            layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]   // bottom corners
+        } else {
+            layer.backgroundColor = jade.cgColor
+            layer.cornerRadius = collapsedFrame().height / 2
+            layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        }
+        panel.hasShadow = open
+    }
+
     func layoutContent() {
         let size = root.bounds.size
-        let strip = topStrip.frame.height
+        let strip = notchSize(targetScreen()).height
+        topStrip.autoresizingMask = [.width, .minYMargin]
+        topStrip.frame = NSRect(x: 0, y: size.height - strip, width: size.width, height: strip)
         footer.frame = NSRect(x: 0, y: 0, width: size.width, height: footerHeight)
         webView.frame = NSRect(x: 8, y: footerHeight, width: size.width - 16,
                                height: max(0, size.height - strip - footerHeight))
@@ -200,7 +199,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         let target = open ? expandedFrame() : collapsedFrame()
         webView.isHidden = true
         footer.isHidden = true
-        root.layer?.cornerRadius = open ? 22 : 12
+        topStrip.autoresizingMask = [.width, .height]
+        topStrip.frame = root.bounds
+        if open { applyLook(expanded: true) }
         if open { NSApp.activate(ignoringOtherApps: true) }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.28
@@ -217,6 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
                 self.webView.evaluateJavaScript("document.getElementById('text') && document.getElementById('text').focus()",
                                                 completionHandler: nil)
             } else {
+                self.applyLook(expanded: false)
                 self.panel.orderFrontRegardless()
             }
         })
@@ -224,6 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
     @objc func screensChanged() {
         panel.setFrame(expanded ? expandedFrame() : collapsedFrame(), display: true)
+        applyLook(expanded: expanded)
         if expanded { layoutContent() }
     }
 
