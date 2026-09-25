@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import avanegar, db, summary
+from . import avanegar, db, summary, updater
 
 STATIC = Path(__file__).resolve().parents[1] / "static"
 DAY = r"^\d{4}-\d{2}-\d{2}$"
@@ -375,6 +375,24 @@ def put_settings(data: SettingsIn):
     if data.text_model is not None:
         db.set_setting("text_model", data.text_model.strip())
     return get_settings()
+
+
+# ---------- in-app update (Mac app) ----------
+
+@app.get("/api/update")
+async def update_check():
+    try:
+        return await updater.check()
+    except updater.UpdateError as e:
+        raise HTTPException(502, str(e)) from None
+
+
+@app.post("/api/update")
+async def update_apply():
+    try:
+        return await updater.apply()
+    except updater.UpdateError as e:
+        raise HTTPException(502, str(e)) from None
 
 
 @app.get("/")

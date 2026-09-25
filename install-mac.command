@@ -8,7 +8,7 @@ NAME="کارنامه"
 SUPPORT="$HOME/Library/Application Support/Karnama"
 
 step() { print -P "%F{green}●%f $1"; }
-fail() { print -P "%F{red}✗ $1%f"; print "برای بستن Enter بزنید."; read; exit 1; }
+fail() { print -P "%F{red}✗ $1%f"; if [[ -t 0 ]]; then print "برای بستن Enter بزنید."; read; fi; exit 1; }
 
 cd "$SRC"
 step "شروع نصب کارنامه…"
@@ -50,6 +50,13 @@ cp "$BUILD/Karnama" "$APP/Contents/MacOS/Karnama"
 cp mac/Info.plist "$APP/Contents/Info.plist"
 cp mac/Karnama.icns "$APP/Contents/Resources/Karnama.icns"
 cp -R app static "$APP/Contents/Resources/"
+# Version marker for the in-app updater (set by the updater; otherwise asked from GitHub).
+VERSION="${KARNAMA_VERSION:-}"
+if [[ -z "$VERSION" ]]; then
+  VERSION="$(curl -fsS -m 10 "https://api.github.com/repos/ourgemeniprostudent-png/odooSEO/commits/claude/daily-task-management-app-1cq6o6" 2>/dev/null \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])' 2>/dev/null || true)"
+fi
+print -r -- "$VERSION" > "$APP/Contents/Resources/VERSION"
 find "$APP/Contents/Resources" -name "__pycache__" -prune -exec rm -rf {} +
 rm -rf "$BUILD"
 

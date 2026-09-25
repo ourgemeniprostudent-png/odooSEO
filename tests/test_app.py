@@ -172,3 +172,17 @@ def test_extract_speech_shapes():
     assert extract_speech([{"text": "الف"}, {"text": "ب"}]) == "الف ب"
     with pytest.raises(ProviderError):
         extract_speech({"data": {"status": "pending"}})
+
+
+def test_update_endpoints(client, monkeypatch):
+    from app import updater
+
+    async def fake_check():
+        return {"supported": False, "current": "", "latest": "abc1234", "latest_sha": "abc1234ff",
+                "available": True, "message": "x", "date": ""}
+
+    monkeypatch.setattr(updater, "check", fake_check)
+    assert client.get("/api/update").json()["available"] is True
+    # outside the installed Mac app the updater refuses to run
+    r = client.post("/api/update")
+    assert r.status_code == 502 and "مک" in r.json()["detail"]

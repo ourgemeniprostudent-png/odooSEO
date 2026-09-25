@@ -142,3 +142,11 @@ body.todo .composer{border-color:color-mix(in srgb,#b5621b 40%,var(--line))}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .seg button{border:0;border-radius:0;background:transparent}
 .seg button.on{background:var(--brand);color:#fff}
+
+/* ---- in-app update ---- */
+.update-bar{position:sticky;top:58px;z-index:4;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;
+  padding:8px 16px;background:#fff4dc;color:#6b4a00;border-bottom:1px solid #f2d79a;font-size:14px}
+.update-bar button{background:var(--jade);border-color:var(--jade);color:#fff;padding:3px 14px}
+.update-bar .x{background:transparent;border:0;color:#6b4a00;font-size:18px;padding:0 6px}
+.update-row{display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+@media (prefers-color-scheme:dark){.update-bar{background:#3a2e12;color:#f5d98f;border-color:#5a4718}.update-bar .x{color:#f5d98f}}

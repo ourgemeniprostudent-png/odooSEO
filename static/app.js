@@ -772,5 +772,47 @@ $("#settingsForm").addEventListener("submit", async (e) => {
   } catch (err) { toast(err.message, true); }
 });
 
+// ---------- in-app update ----------
+const update = { info: null, dismissed: loadJSON("karnama.dismissedUpdate", "") };
+async function checkUpdate(manual = false) {
+  try {
+    update.info = await api("GET", "/api/update");
+  } catch (e) {
+    if (manual) toast(e.message, true);
+    return;
+  }
+  const u = update.info;
+  $("#versionInfo").textContent = u.supported
+    ? `نسخهٔ نصب‌شده: ${u.current || "نامشخص"}` : "به‌روزرسانی خودکار فقط در برنامهٔ مک";
+  if (manual) toast(u.available ? "نسخهٔ جدید آماده است" : "برنامه به‌روز است");
+  const show = u.supported && u.available && (manual || update.dismissed !== u.latest);
+  $("#updateBar").hidden = !show;
+  if (show) {
+    $("#updateBar").innerHTML = `<span>✨ نسخهٔ جدید کارنامه آماده است.</span>
+      <button id="doUpdate">به‌روزرسانی</button><button class="x" id="skipUpdate" title="بعداً">×</button>`;
+  }
+}
+$("#updateBar").addEventListener("click", async (e) => {
+  if (e.target.id === "skipUpdate") {
+    update.dismissed = update.info.latest; saveJSON("karnama.dismissedUpdate", update.dismissed);
+    $("#updateBar").hidden = true;
+  } else if (e.target.id === "doUpdate") {
+    if (voice.rec) return toast("اول ضبط صدا را تمام کنید.", true);
+    if ($("#text").value.trim() && !confirm("متنی در کادر هست که ثبت نشده. بدون ثبت به‌روزرسانی شود؟")) return;
+    e.target.disabled = true;
+    $("#updateBar").querySelector("span").textContent = "در حال دانلود نسخهٔ جدید…";
+    try {
+      await api("POST", "/api/update");
+      $("#updateBar").innerHTML = "<span>در حال نصب… برنامه تا یکی دو دقیقه بسته و دوباره باز می‌شود. داده‌ها محفوظ است.</span>";
+    } catch (err) {
+      toast(err.message, true); e.target.disabled = false;
+      $("#updateBar").querySelector("span").textContent = "به‌روزرسانی انجام نشد؛ دوباره تلاش کنید.";
+    }
+  }
+});
+$("#checkUpdate").onclick = () => checkUpdate(true);
+setTimeout(checkUpdate, 3000);
+setInterval(checkUpdate, 6 * 3600 * 1000);
+
 Promise.all([refresh(), loadSettings()]).catch((e) => toast(e.message, true));
 $("#text").focus();
