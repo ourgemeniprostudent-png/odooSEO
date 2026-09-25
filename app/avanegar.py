@@ -24,11 +24,11 @@ class ProviderHTTPError(ProviderError):
         self.status_code = status
         super().__init__(
             {
-                401: "توکن آوانگار معتبر نیست.",
-                402: "اعتبار آوانگار کافی نیست.",
-                403: "دسترسی آوانگار رد شد.",
-                429: "آوانگار موقتاً به محدودیت درخواست رسیده است.",
-            }.get(status, f"آوانگار پاسخ موفق نداد (HTTP {status}).")
+                401: "کلید/توکن سرویس معتبر نیست.",
+                402: "اعتبار سرویس کافی نیست.",
+                403: "دسترسی سرویس رد شد.",
+                429: "سرویس موقتاً به محدودیت درخواست رسیده است.",
+            }.get(status, f"سرویس پاسخ موفق نداد (HTTP {status}).")
         )
 
 
@@ -58,7 +58,7 @@ async def request(method, url, **kwargs):
                 ) as c:
                     r = await c.request(method, url, **kwargs)
             if r.status_code >= 300:
-                if r.status_code == 400 and duration_rejected(r):
+                if r.status_code == 400 and "avanegar" in url and duration_rejected(r):
                     raise AudioDurationError()
                 if r.status_code in (408, 429, 500, 502, 503, 504) and attempt < 2:
                     await asyncio.sleep(2**attempt)
@@ -67,7 +67,7 @@ async def request(method, url, **kwargs):
             return r.json()
         except (httpx.HTTPError, json.JSONDecodeError, OSError, asyncio.TimeoutError):
             if attempt == 2:
-                raise ProviderError("ارتباط با آوانگار برقرار نشد؛ اینترنت/VPN را بررسی کنید.") from None
+                raise ProviderError("ارتباط با سرویس برقرار نشد؛ اینترنت/VPN را بررسی کنید.") from None
             await asyncio.sleep(2**attempt)
 
 

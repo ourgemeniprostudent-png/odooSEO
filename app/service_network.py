@@ -1,4 +1,4 @@
-"""Optional macOS interface binding so Avanegar is reached directly while a VPN is on.
+"""Optional macOS interface binding so Avanegar/GapGPT are reached directly while a VPN is on.
 
 Copied from payamyar (سیستم یکپارچه‌سازی اطلاعات)."""
 
@@ -16,7 +16,7 @@ def interface_for(url):
     interface = os.environ.get(
         "KARNAMA_SERVICE_INTERFACE", db.setting("provider_interface", "")
     )
-    if sys.platform != "darwin" or httpx.URL(url).host != "partai.gw.isahab.ir":
+    if sys.platform != "darwin" or httpx.URL(url).host not in ("partai.gw.isahab.ir", "api.gapgpt.app"):
         return ""
     return interface
 

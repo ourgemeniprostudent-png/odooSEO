@@ -12,10 +12,10 @@
 <header class="top">
   <h1>کارنامه</h1>
   <nav class="daynav">
-    <button id="prevDay" title="روز قبل">‹</button>
-    <button id="todayBtn" class="ghost">امروز</button>
-    <label class="daylabel"><span id="dayTitle"></span><input type="date" id="dayPicker"></label>
-    <button id="nextDay" title="روز بعد">›</button>
+    <button id="prevDay" title="روز قبل (Alt+→)">‹</button>
+    <button id="dayTitle" class="daylabel" title="تقویم"></button>
+    <button id="nextDay" title="روز بعد (Alt+←)">›</button>
+    <button id="todayBtn" class="ghost" hidden>برو به امروز</button>
   </nav>
   <div class="actions">
     <button id="reportBtn" class="primary">خروجی گزارش</button>
@@ -24,7 +24,16 @@
   </div>
 </header>
 
+<div id="cal" class="cal card" hidden></div>
+
 <main>
+  <section id="summary" class="summary card"></section>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="done">انجام دادم <span class="n" id="doneCount"></span></button>
+    <button role="tab" data-tab="todo">باید انجام بدم <span class="n" id="todoCount"></span></button>
+  </div>
+
   <section class="composer card">
     <div class="compose-row">
       <textarea id="text" rows="3" placeholder="چه کاری انجام دادی؟ بنویس یا دکمهٔ میکروفون را بزن و بگو…"></textarea>
@@ -38,7 +47,7 @@
       <div id="composeTags" class="chips"></div>
       <div class="compose-end">
         <label class="minutes">مدت <input id="minutes" type="number" min="0" max="1440" placeholder="دقیقه"></label>
-        <button id="save" class="primary">ثبت کار <kbd>Ctrl+Enter</kbd></button>
+        <button id="save" class="primary"><span id="saveLabel">ثبت کار</span> <kbd>Ctrl+Enter</kbd></button>
       </div>
     </div>
   </section>
@@ -48,11 +57,19 @@
     <div id="dayStats" class="muted"></div>
   </section>
   <ol id="entries" class="entries"></ol>
-  <p id="empty" class="empty" hidden>هنوز کاری برای این روز ثبت نشده.</p>
+  <p id="empty" class="empty" hidden></p>
+  <div id="carriedWrap" hidden>
+    <h3 class="section-title">مانده از روزهای قبل</h3>
+    <ol id="carried" class="entries"></ol>
+  </div>
 </main>
 
 <dialog id="reportDlg" class="dlg wide">
   <form method="dialog" class="dlg-head"><h2>خروجی گزارش</h2><button class="x">×</button></form>
+  <div class="seg" id="rKind">
+    <button data-kind="done" class="on">کارهای انجام‌شده</button>
+    <button data-kind="todo">کارهایی که باید انجام شود</button>
+  </div>
   <div class="report-opts">
     <label>از <input type="date" id="rFrom"></label>
     <label>تا <input type="date" id="rTo"></label>
@@ -67,7 +84,8 @@
     <label class="check"><input type="checkbox" id="rTime"> ساعت ثبت</label>
     <label class="check"><input type="checkbox" id="rMinutes" checked> مدت کار</label>
     <label class="check"><input type="checkbox" id="rFaDigits" checked> اعداد فارسی</label>
-    <label class="check"><input type="checkbox" id="rUntagged"> کارهای بدون تگ</label>
+    <label class="check"><input type="checkbox" id="rUntagged"> بدون تگ‌ها هم بیاید</label>
+    <label class="check" id="rCarryWrap" hidden><input type="checkbox" id="rCarry" checked> تسک‌های مانده از قبل</label>
   </div>
   <textarea id="rOut" class="report-out" rows="16" readonly></textarea>
   <div class="dlg-foot">
@@ -93,10 +111,17 @@
       <input id="sToken" type="password" autocomplete="off" placeholder="برای تغییر وارد کنید">
       <small id="sTokenState" class="muted"></small>
     </label>
+    <label>کلید گپ‌جی‌پی‌تی (برای خلاصهٔ روز)
+      <input id="sGap" type="password" autocomplete="off" placeholder="برای تغییر وارد کنید">
+      <small id="sGapState" class="muted"></small>
+    </label>
+    <label>مدل متن گپ‌جی‌پی‌تی
+      <input id="sModel" placeholder="glm-5.3" dir="ltr">
+    </label>
     <label>نام شما در بالای گزارش (اختیاری)
       <input id="sName" maxlength="120">
     </label>
-    <label>اتصال مستقیم آوانگار وقتی VPN روشن است (فقط مک)
+    <label>اتصال مستقیم آوانگار و گپ‌جی‌پی‌تی وقتی VPN روشن است (فقط مک)
       <select id="sIface">
         <option value="">عادی (از مسیر پیش‌فرض)</option>
         <option value="en0">وای‌فای مک (en0)</option>

@@ -33,7 +33,20 @@ CREATE TABLE IF NOT EXISTS entry_tags (
 );
 CREATE INDEX IF NOT EXISTS entries_day ON entries(day);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS day_summaries (
+    day TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
+
+# Columns added after the first release; created on start for older databases.
+MIGRATIONS = {
+    "kind": "ALTER TABLE entries ADD COLUMN kind TEXT NOT NULL DEFAULT 'done'",
+    "planned_day": "ALTER TABLE entries ADD COLUMN planned_day TEXT",
+    "audio": "ALTER TABLE entries ADD COLUMN audio TEXT NOT NULL DEFAULT '[]'",
+}
 
 
 def path():
@@ -58,7 +71,17 @@ def init():
     with conn() as c:
         c.execute("PRAGMA journal_mode = WAL")
         c.executescript(SCHEMA)
+        have = {r["name"] for r in c.execute("PRAGMA table_info(entries)")}
+        for col, sql in MIGRATIONS.items():
+            if col not in have:
+                c.execute(sql)
+        c.execute("CREATE INDEX IF NOT EXISTS entries_kind_day ON entries(kind, day)")
+    audio_dir().mkdir(exist_ok=True)
     os.chmod(path(), 0o600)
+
+
+def audio_dir():
+    return DATA / "audio"
 
 
 def now():
@@ -82,3 +105,7 @@ def set_setting(key, value):
 
 def avanegar_token():
     return os.environ.get("AVANEGAR_TOKEN") or setting("avanegar_token", "")
+
+
+def gapgpt_key():
+    return os.environ.get("GAPGPT_KEY") or setting("gapgpt_key", "")

@@ -1,6 +1,9 @@
 """کارنامه — ثبت کارهای روزانه با تگ و تایپ صوتی آوانگار، و خروجی گزارش هر تگ."""
 
+import json
 import re
+import secrets
+import time
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -10,14 +13,28 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import avanegar, db
+from . import avanegar, db, summary
 
 STATIC = Path(__file__).resolve().parents[1] / "static"
 DAY = r"^\d{4}-\d{2}-\d{2}$"
 MAX_AUDIO = 30 * 1024 * 1024
+AUDIO_NAME = r"^[0-9a-f]{24}\.(webm|ogg|m4a|mp3|wav)$"
+AUDIO_TYPES = {"webm": "audio/webm", "ogg": "audio/ogg", "m4a": "audio/mp4", "mp3": "audio/mpeg", "wav": "audio/wav"}
 
 app = FastAPI(title="کارنامه")
 db.init()
+
+
+def cleanup_orphan_audio():
+    """Recordings that were transcribed but never saved with an entry."""
+    with db.conn() as c:
+        used = {a for r in c.execute("SELECT audio FROM entries") for a in json.loads(r["audio"])}
+    for f in db.audio_dir().iterdir():
+        if f.name not in used and time.time() - f.stat().st_mtime > 2 * 86400:
+            f.unlink(missing_ok=True)
+
+
+cleanup_orphan_audio()
 
 
 @app.middleware("http")
@@ -104,10 +121,12 @@ def delete_tag(tag_id: int):
 
 class EntryIn(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
+    kind: str = Field(default="done", pattern=r"^(done|todo)$")
     day: Optional[str] = Field(default=None, pattern=DAY)
     minutes: Optional[int] = Field(default=None, ge=0, le=24 * 60)
     tag_ids: list[int] = []
     source: str = Field(default="text", pattern=r"^(text|voice)$")
+    audio: list[str] = []
 
 
 class EntryPatch(BaseModel):
@@ -116,6 +135,8 @@ class EntryPatch(BaseModel):
     minutes: Optional[int] = Field(default=None, ge=0, le=24 * 60)
     clear_minutes: bool = False
     tag_ids: Optional[list[int]] = None
+    # "done" completes a to-do on `day` (default today); "todo" puts it back.
+    kind: Optional[str] = Field(default=None, pattern=r"^(done|todo)$")
 
 
 def set_tags(c, entry_id, tag_ids):
@@ -127,6 +148,10 @@ def set_tags(c, entry_id, tag_ids):
     )
 
 
+def valid_audio(names):
+    return [n for n in dict.fromkeys(names) if re.match(AUDIO_NAME, n) and (db.audio_dir() / n).is_file()]
+
+
 def entry_rows(c, where="", args=()):
     rows = [dict(r) for r in c.execute(f"SELECT * FROM entries {where} ORDER BY day, created_at, id", args)]
     tags = {}
@@ -134,16 +159,85 @@ def entry_rows(c, where="", args=()):
         tags.setdefault(r["entry_id"], []).append(r["tag_id"])
     for r in rows:
         r["tag_ids"] = tags.get(r["id"], [])
+        r["audio"] = json.loads(r["audio"])
     return rows
 
 
-@app.get("/api/entries")
-def list_entries(start: str, end: Optional[str] = None):
-    for d in (start, end or start):
+def check_day(*days):
+    for d in days:
         if not re.match(DAY, d):
             raise HTTPException(422, "تاریخ نامعتبر")
+
+
+@app.get("/api/entries")
+def list_entries(start: str, end: Optional[str] = None, kind: Optional[str] = None):
+    check_day(start, end or start)
+    where, args = "WHERE day BETWEEN ? AND ?", [start, end or start]
+    if kind in ("done", "todo"):
+        where += " AND kind=?"
+        args.append(kind)
     with db.conn() as c:
-        return entry_rows(c, "WHERE day BETWEEN ? AND ?", (start, end or start))
+        return entry_rows(c, where, args)
+
+
+def day_payload(c, day):
+    today = date.today().isoformat()
+    done = entry_rows(c, "WHERE kind='done' AND day=?", (day,))
+    todo = entry_rows(c, "WHERE kind='todo' AND day=?", (day,))
+    # Open to-dos from earlier days show up on today's page until they are done.
+    carried = entry_rows(c, "WHERE kind='todo' AND day<?", (day,)) if day == today else []
+    row = c.execute("SELECT * FROM day_summaries WHERE day=?", (day,)).fetchone()
+    fp = summary.fingerprint(done, todo + carried)
+    return {
+        "day": day,
+        "today": today,
+        "done": done,
+        "todo": todo,
+        "carried": carried,
+        "summary": {"text": row["text"], "created_at": row["created_at"], "stale": row["fingerprint"] != fp}
+        if row else None,
+    }
+
+
+@app.get("/api/day/{day}")
+def get_day(day: str):
+    check_day(day)
+    with db.conn() as c:
+        return day_payload(c, day)
+
+
+@app.post("/api/day/{day}/summary")
+async def make_summary(day: str):
+    check_day(day)
+    with db.conn() as c:
+        data = day_payload(c, day)
+        tags = tag_rows(c)
+    open_todo = data["todo"] + data["carried"]
+    try:
+        text = await summary.generate(day, data["done"], open_todo, tags)
+    except avanegar.ProviderError as e:
+        raise HTTPException(502, str(e)) from None
+    with db.conn() as c:
+        c.execute(
+            "INSERT INTO day_summaries(day,text,fingerprint,created_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(day) DO UPDATE SET text=excluded.text, fingerprint=excluded.fingerprint, "
+            "created_at=excluded.created_at",
+            (day, text, summary.fingerprint(data["done"], open_todo), db.now()),
+        )
+        return day_payload(c, day)["summary"]
+
+
+@app.get("/api/calendar")
+def calendar(start: str, end: str):
+    check_day(start, end)
+    out = {}
+    with db.conn() as c:
+        for r in c.execute(
+            "SELECT day, kind, COUNT(*) n FROM entries WHERE day BETWEEN ? AND ? GROUP BY day, kind",
+            (start, end),
+        ):
+            out.setdefault(r["day"], {"done": 0, "todo": 0})[r["kind"]] = r["n"]
+    return out
 
 
 @app.post("/api/entries")
@@ -152,10 +246,13 @@ def create_entry(entry: EntryIn):
     if not text:
         raise HTTPException(422, "متن خالی است")
     stamp = db.now()
+    day = entry.day or date.today().isoformat()
     with db.conn() as c:
         cur = c.execute(
-            "INSERT INTO entries(text,day,minutes,source,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-            (text, entry.day or date.today().isoformat(), entry.minutes, entry.source, stamp, stamp),
+            "INSERT INTO entries(text,kind,day,planned_day,minutes,source,audio,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (text, entry.kind, day, day if entry.kind == "todo" else None, entry.minutes,
+             entry.source, json.dumps(valid_audio(entry.audio)), stamp, stamp),
         )
         set_tags(c, cur.lastrowid, entry.tag_ids)
         return entry_rows(c, "WHERE id=?", (cur.lastrowid,))[0]
@@ -164,13 +261,24 @@ def create_entry(entry: EntryIn):
 @app.patch("/api/entries/{entry_id}")
 def update_entry(entry_id: int, patch: EntryPatch):
     with db.conn() as c:
-        if not c.execute("SELECT 1 FROM entries WHERE id=?", (entry_id,)).fetchone():
+        row = c.execute("SELECT * FROM entries WHERE id=?", (entry_id,)).fetchone()
+        if not row:
             raise HTTPException(404, "کار پیدا نشد")
         if patch.text is not None:
             if not patch.text.strip():
                 raise HTTPException(422, "متن خالی است")
             c.execute("UPDATE entries SET text=? WHERE id=?", (patch.text.strip(), entry_id))
-        if patch.day is not None:
+        if patch.kind == "done" and row["kind"] == "todo":
+            c.execute(
+                "UPDATE entries SET kind='done', day=?, planned_day=COALESCE(planned_day, day) WHERE id=?",
+                (patch.day or date.today().isoformat(), entry_id),
+            )
+        elif patch.kind == "todo" and row["kind"] == "done":
+            c.execute(
+                "UPDATE entries SET kind='todo', day=COALESCE(?, planned_day, day) WHERE id=?",
+                (patch.day, entry_id),
+            )
+        elif patch.day is not None:
             c.execute("UPDATE entries SET day=? WHERE id=?", (patch.day, entry_id))
         if patch.clear_minutes:
             c.execute("UPDATE entries SET minutes=NULL WHERE id=?", (entry_id,))
@@ -185,7 +293,10 @@ def update_entry(entry_id: int, patch: EntryPatch):
 @app.delete("/api/entries/{entry_id}")
 def delete_entry(entry_id: int):
     with db.conn() as c:
+        row = c.execute("SELECT audio FROM entries WHERE id=?", (entry_id,)).fetchone()
         c.execute("DELETE FROM entries WHERE id=?", (entry_id,))
+    for name in json.loads(row["audio"]) if row else []:
+        (db.audio_dir() / name).unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -199,11 +310,35 @@ async def transcribe(audio: UploadFile = File(...)):
     if len(data) > MAX_AUDIO:
         raise HTTPException(413, "فایل صوتی بیش از حد بزرگ است")
     mime = (audio.content_type or "audio/webm").split(";")[0]
+    # Keep the original recording so it can be played back from the entry.
+    ext = {"audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav"}.get(mime, "webm")
+    name = f"{secrets.token_hex(12)}.{ext}"
+    (db.audio_dir() / name).write_bytes(data)
     try:
         text = await avanegar.transcribe(data, mime, audio.filename or "voice.webm")
     except avanegar.ProviderError as e:
-        raise HTTPException(502, str(e)) from None
-    return {"text": text.strip()}
+        # The recording stays saved; the message tells the user it can be retried.
+        raise HTTPException(502, {"message": str(e), "audio": name}) from None
+    return {"text": text.strip(), "audio": name}
+
+
+@app.post("/api/transcribe/{name}")
+async def retranscribe(name: str):
+    if not re.match(AUDIO_NAME, name) or not (db.audio_dir() / name).is_file():
+        raise HTTPException(404, "فایل صوتی پیدا نشد")
+    ext = name.rsplit(".", 1)[1]
+    try:
+        text = await avanegar.transcribe((db.audio_dir() / name).read_bytes(), AUDIO_TYPES[ext], name)
+    except avanegar.ProviderError as e:
+        raise HTTPException(502, {"message": str(e), "audio": name}) from None
+    return {"text": text.strip(), "audio": name}
+
+
+@app.get("/api/audio/{name}")
+def get_audio(name: str):
+    if not re.match(AUDIO_NAME, name) or not (db.audio_dir() / name).is_file():
+        raise HTTPException(404, "فایل صوتی پیدا نشد")
+    return FileResponse(db.audio_dir() / name, media_type=AUDIO_TYPES[name.rsplit(".", 1)[1]])
 
 
 # ---------- settings ----------
@@ -212,6 +347,8 @@ class SettingsIn(BaseModel):
     avanegar_token: Optional[str] = Field(default=None, max_length=4000)
     provider_interface: Optional[str] = Field(default=None, pattern=r"^(en[0-9]+)?$")
     report_name: Optional[str] = Field(default=None, max_length=120)
+    gapgpt_key: Optional[str] = Field(default=None, max_length=4000)
+    text_model: Optional[str] = Field(default=None, max_length=200)
 
 
 @app.get("/api/settings")
@@ -220,6 +357,8 @@ def get_settings():
         "has_avanegar_token": bool(db.avanegar_token()),
         "provider_interface": db.setting("provider_interface", ""),
         "report_name": db.setting("report_name", ""),
+        "has_gapgpt_key": bool(db.gapgpt_key()),
+        "text_model": db.setting("text_model", "") or summary.DEFAULT_MODEL,
     }
 
 
@@ -231,6 +370,10 @@ def put_settings(data: SettingsIn):
         db.set_setting("provider_interface", data.provider_interface)
     if data.report_name is not None:
         db.set_setting("report_name", data.report_name.strip())
+    if data.gapgpt_key is not None and data.gapgpt_key.strip():
+        db.set_setting("gapgpt_key", data.gapgpt_key.strip())
+    if data.text_model is not None:
+        db.set_setting("text_model", data.text_model.strip())
     return get_settings()
 
 
