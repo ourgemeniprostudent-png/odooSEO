@@ -23,23 +23,27 @@ final class NotchPanel: NSPanel {
 // A view whose clicks fall through to a handler (the whole collapsed strip is one button).
 final class ClickView: NSView {
     var onClick: (() -> Void)?
+    // Without this the first click on an inactive app only activates it and is swallowed.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { onClick?() }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate {
+// Same for the page: react to the first click even when another app is in front.
+final class FirstClickWebView: WKWebView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var panel: NotchPanel!
     var root: NSView!
     var topStrip: ClickView!
     var webView: WKWebView!
-    var footer: NSView!
     var server: Process?
     var expanded = false
     var animating = false
 
     let buttonWidth: CGFloat = 34       // the collapsed jade button
-    let expandedWidth: CGFloat = 520
-    let footerHeight: CGFloat = 44
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
@@ -103,9 +107,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
     func expandedFrame() -> NSRect {
         let screen = targetScreen()
-        let height = min(780, screen.frame.height - 40)
-        return NSRect(x: screen.frame.midX - expandedWidth / 2, y: screen.frame.maxY - height,
-                      width: expandedWidth, height: height)
+        let width = min(860, max(640, screen.frame.width * 0.55))
+        let height = min(820, screen.frame.height - 60)
+        return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - height,
+                      width: width, height: height)
     }
 
     // MARK: - panel
@@ -141,26 +146,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         // Web content (hidden while collapsed).
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
-        webView = WKWebView(frame: .zero, configuration: config)
+        // The page's own ⌃ button asks the app to collapse through this channel.
+        config.userContentController.add(self, name: "karnama")
+        webView = FirstClickWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
         webView.navigationDelegate = self
-        webView.wantsLayer = true
-        webView.layer?.cornerRadius = 12
-        webView.layer?.masksToBounds = true
         webView.isHidden = true
         root.addSubview(webView)
-
-        // Footer with the collapse button.
-        footer = NSView(frame: .zero)
-        footer.isHidden = true
-        let button = NSButton(title: "⌃  جمع کردن", target: self, action: #selector(collapse))
-        button.isBordered = false
-        button.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        button.contentTintColor = NSColor(red: 0.55, green: 0.9, blue: 0.76, alpha: 1)
-        button.frame = NSRect(x: 0, y: 0, width: expandedWidth, height: footerHeight)
-        button.autoresizingMask = [.width, .height]
-        footer.addSubview(button)
-        root.addSubview(footer)
 
         panel.orderFrontRegardless()
     }
@@ -185,12 +177,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         let strip = notchSize(targetScreen()).height
         topStrip.autoresizingMask = [.width, .minYMargin]
         topStrip.frame = NSRect(x: 0, y: size.height - strip, width: size.width, height: strip)
-        footer.frame = NSRect(x: 0, y: 0, width: size.width, height: footerHeight)
-        webView.frame = NSRect(x: 8, y: footerHeight, width: size.width - 16,
-                               height: max(0, size.height - strip - footerHeight))
+        // Page fills the panel edge to edge under the black notch band; the root clips the bottom corners.
+        webView.frame = NSRect(x: 0, y: 0, width: size.width, height: max(0, size.height - strip))
     }
 
     @objc func collapse() { setExpanded(false) }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if let command = message.body as? String, command == "collapse" { setExpanded(false) }
+    }
 
     func setExpanded(_ open: Bool) {
         guard !animating, open != expanded else { return }
@@ -198,7 +193,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         expanded = open
         let target = open ? expandedFrame() : collapsedFrame()
         webView.isHidden = true
-        footer.isHidden = true
         topStrip.autoresizingMask = [.width, .height]
         topStrip.frame = root.bounds
         if open { applyLook(expanded: true) }
@@ -212,7 +206,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
             if self.expanded {
                 self.layoutContent()
                 self.webView.isHidden = false
-                self.footer.isHidden = false
                 self.panel.makeKeyAndOrderFront(nil)
                 self.panel.makeFirstResponder(self.webView)
                 self.webView.evaluateJavaScript("document.getElementById('text') && document.getElementById('text').focus()",

@@ -152,13 +152,16 @@ body.todo .composer{border-color:color-mix(in srgb,#b5621b 40%,var(--line))}
 .update-row{display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:12px}
 @media (prefers-color-scheme:dark){.update-bar{background:#3a2e12;color:#f5d98f;border-color:#5a4718}.update-bar .x{color:#f5d98f}}
 
-/* ---- inside the notch panel of the Mac app (narrow, the strip above already shows the name) ---- */
+/* ---- inside the notch panel of the Mac app ---- */
+.collapse-btn{display:none}
 html.in-notch .top h1{display:none}
-html.in-notch .top{padding:8px 10px;gap:8px;justify-content:center}
-html.in-notch .top .actions{width:auto}
-html.in-notch main{padding:12px 10px 24px}
-html.in-notch .summary{padding:10px 12px;margin-bottom:10px}
-html.in-notch .daylabel{min-width:0}
-html.in-notch .cal{top:96px}
-html.in-notch ::-webkit-scrollbar{width:6px}
-html.in-notch ::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--brand) 40%,transparent);border-radius:6px}
+html.in-notch .top{padding:10px 16px;box-shadow:none}
+html.in-notch main{padding:14px 16px 28px}
+html.in-notch .cal{top:70px}
+html.in-notch .collapse-btn{display:inline-flex;align-items:center;justify-content:center;width:38px;padding:0;
+  background:#fff;border-color:#fff;border-radius:50%}
+html.in-notch .collapse-btn svg{width:18px;height:18px;fill:none;stroke:var(--jade);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+html.in-notch .collapse-btn:hover{background:#e3f4ed}
+html.in-notch ::-webkit-scrollbar{width:8px}
+html.in-notch ::-webkit-scrollbar-track{background:transparent}
+html.in-notch ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.14);border-radius:8px;border:2px solid transparent;background-clip:padding-box}

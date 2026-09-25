@@ -746,6 +746,10 @@ async function openSettings() {
   $("#settingsDlg").showModal();
 }
 $("#settingsBtn").onclick = openSettings;
+// Notch panel: ask the Mac app to slide the panel back up.
+$("#collapseBtn").onclick = () => {
+  try { window.webkit.messageHandlers.karnama.postMessage("collapse"); } catch {}
+};
 $("#settingsForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
