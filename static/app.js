@@ -38,6 +38,26 @@ function faDay(s, withYear = true) {
 const FA = "۰۱۲۳۴۵۶۷۸۹";
 const toFa = (s) => String(s).replace(/\d/g, (d) => FA[d]);
 const hhmm = (iso) => iso.slice(11, 16);
+// Persian (۰-۹) and Arabic (٠-٩) digits → Latin, so either keyboard works in number fields.
+const toEn = (s) => String(s).replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
+// Minutes field: "45", "۴۵", or hours:minutes like "1:30" / "۱:۳۰". Returns null (empty) or NaN (invalid).
+function parseMinutes(raw) {
+  const v = toEn(raw).trim().replace(/[٫،,]/g, ".").replace(/\s+/g, "");
+  if (!v) return null;
+  let m = v.match(/^(\d+):(\d{1,2})$/);
+  if (m) return +m[1] * 60 + +m[2];
+  m = v.match(/^\d+$/);
+  const n = m ? +v : NaN;
+  return n >= 0 && n <= 1440 ? n : NaN;
+}
+function minutesField(input) {
+  const n = parseMinutes(input.value);
+  if (Number.isNaN(n)) {
+    input.focus(); input.select();
+    throw new ApiError("مدت را به دقیقه بنویسید (مثلاً ۴۵) یا ساعت:دقیقه (مثلاً ۱:۳۰).");
+  }
+  return n;
+}
 function duration(min) {
   if (!min) return "";
   const h = Math.floor(min / 60), m = min % 60;
@@ -279,7 +299,8 @@ $("#composeTags").addEventListener("click", async (ev) => {
 async function saveEntry() {
   const text = $("#text").value.trim();
   if (!text) return $("#text").focus();
-  const minutes = $("#minutes").value ? +$("#minutes").value : null;
+  let minutes;
+  try { minutes = minutesField($("#minutes")); } catch (e) { return toast(e.message, true); }
   $("#save").disabled = true;
   try {
     await api("POST", "/api/entries", {
@@ -432,7 +453,7 @@ function editEntry(li, entry) {
   const body = li.querySelector(".body");
   body.innerHTML = `<textarea rows="3">${esc(entry.text)}</textarea>
     <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
-      <label class="minutes">مدت <input type="number" min="0" max="1440" value="${entry.minutes ?? ""}" placeholder="دقیقه"></label>
+      <label class="minutes">مدت <input type="text" inputmode="numeric" autocomplete="off" value="${entry.minutes ?? ""}" placeholder="دقیقه"></label>
       <label class="minutes">روز <input type="date" value="${entry.day}"></label>
       <button class="primary sm" data-save>ذخیره</button><button class="ghost sm" data-cancel>انصراف</button>
     </div>`;
@@ -441,9 +462,10 @@ function editEntry(li, entry) {
   const save = async () => {
     const [min, day] = body.querySelectorAll("input");
     try {
+      const minutes = minutesField(min);
       await api("PATCH", `/api/entries/${entry.id}`, {
         text: ta.value, day: day.value || entry.day,
-        ...(min.value === "" ? { clear_minutes: true } : { minutes: +min.value }),
+        ...(minutes === null ? { clear_minutes: true } : { minutes }),
       });
       await loadDay(); render();
     } catch (e) { toast(e.message, true); }
