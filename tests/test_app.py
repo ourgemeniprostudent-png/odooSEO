@@ -195,3 +195,11 @@ def test_update_endpoints(client, monkeypatch):
     # outside the installed Mac app the updater refuses to run
     r = client.post("/api/update")
     assert r.status_code == 502 and "مک" in r.json()["detail"]
+
+
+def test_move_done_item_to_todo_and_back(client):
+    e = client.post("/api/entries", json={"text": "کار", "day": "2026-09-25"}).json()
+    t = client.patch(f"/api/entries/{e['id']}", json={"kind": "todo"}).json()
+    assert t["kind"] == "todo" and t["day"] == "2026-09-25"
+    d = client.patch(f"/api/entries/{e['id']}", json={"kind": "done", "day": "2026-09-26"}).json()
+    assert d["kind"] == "done" and d["day"] == "2026-09-26" and d["planned_day"] == "2026-09-25"

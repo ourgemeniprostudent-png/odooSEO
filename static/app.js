@@ -235,7 +235,6 @@ function entryHTML(e) {
     ${lead}
     <div class="body">${esc(e.text)}</div>
     <div class="ops">
-      ${!isTodo && e.planned_day ? `<button data-act="reopen" title="برگرداندن به تسک‌ها">↩</button>` : ""}
       <button data-act="edit" title="ویرایش">✎</button>
       <button data-act="del" title="حذف">🗑</button>
     </div>
@@ -244,6 +243,8 @@ function entryHTML(e) {
       ${tags.length ? `<button class="chip add" data-act="tags">± تگ</button>` : `<button class="untagged" data-act="tags">+ تگ بزن</button>`}
       ${e.minutes ? `<span class="dur">⏱ ${toFa(duration(e.minutes))}</span>` : ""}
       ${extra.join("")}
+      <button class="move-btn" data-act="${isTodo ? "check" : "reopen"}"
+        title="${isTodo ? "انتقال به «انجام دادم»" : "انتقال به «باید انجام بدم»"}">⇄ ${isTodo ? "به انجام دادم" : "به باید انجام بدم"}</button>
     </div>
   </li>`;
 }
@@ -421,8 +422,8 @@ async function onEntryClick(ev) {
       await api("PATCH", `/api/entries/${entry.id}`, { kind: "done", day: state.day });
       toast("انجام شد؛ به «انجام دادم» رفت");
     } else if (act === "reopen") {
-      await api("PATCH", `/api/entries/${entry.id}`, { kind: "todo" });
-      toast("به «باید انجام بدم» برگشت");
+      await api("PATCH", `/api/entries/${entry.id}`, { kind: "todo", day: entry.planned_day ? undefined : state.day });
+      toast("به «باید انجام بدم» رفت");
     } else if (act === "edit") {
       return editEntry(li, entry);
     } else if (act === "tags") {

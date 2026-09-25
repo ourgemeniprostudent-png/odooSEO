@@ -165,3 +165,10 @@ html.in-notch .collapse-btn:hover{background:#e3f4ed}
 html.in-notch ::-webkit-scrollbar{width:8px}
 html.in-notch ::-webkit-scrollbar-track{background:transparent}
 html.in-notch ::-webkit-scrollbar-thumb{background:rgba(0,0,0,.14);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+
+/* ---- move an item between «انجام دادم» and «باید انجام بدم» (coloured by where it goes) ---- */
+.move-btn{margin-inline-start:auto;font-size:12px;border-radius:999px;padding:1px 12px;background:transparent;
+  border:1px solid color-mix(in srgb,#b5621b 45%,transparent);color:#b5621b}
+.move-btn:hover{background:#b5621b;color:#fff}
+.entry.todo .move-btn{border-color:color-mix(in srgb,var(--brand) 45%,transparent);color:var(--brand)}
+.entry.todo .move-btn:hover{background:var(--brand);color:#fff}
