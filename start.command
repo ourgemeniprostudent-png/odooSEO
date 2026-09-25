@@ -7,5 +7,7 @@ if [[ ! -x .venv/bin/python ]]; then
   python3 -m venv .venv
   .venv/bin/pip install -q -r requirements.txt
 fi
+# Same data folder as the Mac app, so both show the same work.
+export KARNAMA_DATA="${KARNAMA_DATA:-$HOME/Library/Application Support/Karnama/data}"
 (sleep 1.5 && open "http://127.0.0.1:8770") &
 exec .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8770
