@@ -1,6 +1,7 @@
 // کارنامه — native macOS shell that lives at the camera notch.
-// Collapsed: a small plain jade button right beside the notch. Click it and the panel drops down;
-// the «جمع کردن» button at the bottom slides it back up. Also starts the local Python server.
+// A small plain jade button in the menu bar opens the panel, which drops down out of the notch;
+// the ⌃ button in the page (or the menu bar button again) slides it back up into the notch.
+// Also starts the local Python server.
 // Built on the user's Mac by install-mac.command with:  swiftc -O -o Karnama Karnama.swift
 
 import Cocoa
@@ -60,19 +61,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     var expanded = false
     var animating = false
     var lastToggle = Date.distantPast
-    var clickMonitors: [Any] = []
-
-    let buttonWidth: CGFloat = 34       // the collapsed jade button
+    var statusItem: NSStatusItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: appLog.path, contents: nil)
         let version = (try? String(contentsOfFile: (Bundle.main.resourcePath ?? "") + "/VERSION", encoding: .utf8)) ?? "?"
         let screen = targetScreen()
-        diag("launch version=\(version.trimmingCharacters(in: .whitespacesAndNewlines).prefix(7)) screen=\(screen.frame) notch=\(notchSize(screen)) button=\(collapsedFrame())")
+        diag("launch version=\(version.trimmingCharacters(in: .whitespacesAndNewlines).prefix(7)) screen=\(screen.frame) notch=\(notchSize(screen)) notchFrame=\(notchFrame())")
         buildMenu()
+        buildStatusItem()
         buildPanel()
-        watchClicks()
         startServer()
         webView.loadHTMLString(Self.page("در حال آماده‌سازی کارنامه…"), baseURL: nil)
         waitAndLoad(attempt: 0)
@@ -120,14 +119,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         return (menuBar > 0 ? menuBar : 24, 0)
     }
 
-    /// Small jade button in the notch row: just right of the notch, or top centre without a notch.
-    func collapsedFrame() -> NSRect {
+    /// The notch itself: where the panel grows from and shrinks back into.
+    func notchFrame() -> NSRect {
         let screen = targetScreen()
         let notch = notchSize(screen)
-        let height = max(14, min(20, notch.height - 12))
-        let x = notch.width > 0 ? screen.frame.midX + notch.width / 2 + 8 : screen.frame.midX - buttonWidth / 2
-        let y = screen.frame.maxY - notch.height / 2 - height / 2
-        return NSRect(x: x, y: y, width: buttonWidth, height: height)
+        let width = max(notch.width, 160)
+        return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - notch.height,
+                      width: width, height: notch.height)
     }
 
     func expandedFrame() -> NSRect {
@@ -141,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     // MARK: - panel
 
     func buildPanel() {
-        let frame = collapsedFrame()
+        let frame = notchFrame()
         panel = NotchPanel(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
         panel.level = panelLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
@@ -151,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = true
+        panel.orderOut(nil)
 
         root = NSView(frame: NSRect(origin: .zero, size: frame.size))
         root.wantsLayer = true
@@ -166,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
             self.toggleFromClick()
         }
         root.addSubview(topStrip)
-        applyLook(expanded: false)
+        applyLook()
 
         // Web content (hidden while collapsed).
         let config = WKWebViewConfiguration()
@@ -178,23 +177,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         webView.navigationDelegate = self
         webView.isHidden = true
         root.addSubview(webView)
-
-        panel.orderFrontRegardless()
     }
 
-    /// Collapsed: plain jade pill. Open: black panel growing out of the notch.
-    func applyLook(expanded open: Bool) {
-        guard let layer = root.layer else { return }
-        if open {
-            layer.backgroundColor = NSColor.black.cgColor
-            layer.cornerRadius = 22
-            layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]   // bottom corners
-        } else {
-            layer.backgroundColor = jade.cgColor
-            layer.cornerRadius = collapsedFrame().height / 2
-            layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+    /// Menu bar button: macOS always delivers clicks here (the notch row itself swallows them).
+    func buildStatusItem() {
+        statusItem = NSStatusBar.system.statusItem(withLength: 34)
+        guard let button = statusItem.button else { return }
+        let size = NSSize(width: 26, height: 14)
+        let pill = NSImage(size: size, flipped: false) { rect in
+            jade.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: rect.height / 2, yRadius: rect.height / 2).fill()
+            return true
         }
-        panel.hasShadow = open
+        pill.isTemplate = false
+        button.image = pill
+        button.imagePosition = .imageOnly
+        button.toolTip = "کارنامه"
+        button.target = self
+        button.action = #selector(statusClicked)
+    }
+
+    @objc func statusClicked() {
+        diag("click: menu bar button")
+        toggleFromClick()
+    }
+
+    /// Black panel growing out of the notch, rounded at the bottom.
+    func applyLook() {
+        guard let layer = root.layer else { return }
+        layer.backgroundColor = NSColor.black.cgColor
+        layer.cornerRadius = 22
+        layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
     }
 
     func layoutContent() {
@@ -215,32 +228,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         setExpanded(!expanded)
     }
 
-    /// Belt and braces for the small button: besides the view's own mouseDown, catch clicks on the
-    /// button whether macOS delivers them to this app (local) or to the menu bar / another app (global).
-    func watchClicks() {
-        if let local = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] event in
-            guard let self = self, event.window === self.panel else { return event }
-            let point = self.topStrip.convert(event.locationInWindow, from: nil)
-            if self.topStrip.bounds.contains(point) {
-                diag("click: local monitor")
-                self.toggleFromClick()
-                return nil
-            }
-            return event
-        }) {
-            clickMonitors.append(local)
-        }
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] _ in
-            guard let self = self, !self.expanded else { return }
-            if self.panel.frame.insetBy(dx: -6, dy: -6).contains(NSEvent.mouseLocation) {
-                diag("click: global monitor at \(NSEvent.mouseLocation)")
-                self.toggleFromClick()
-            }
-        }) {
-            clickMonitors.append(global)
-        }
-    }
-
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if let command = message.body as? String, command == "collapse" { setExpanded(false) }
     }
@@ -255,12 +242,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         expanded = open
         // Never stay locked if an animation's completion is skipped.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.animating = false }
-        let target = open ? expandedFrame() : collapsedFrame()
+        let target = open ? expandedFrame() : notchFrame()
         webView.isHidden = true
         topStrip.autoresizingMask = [.width, .height]
         topStrip.frame = root.bounds
-        if open { applyLook(expanded: true) }
-        if open { NSApp.activate(ignoringOtherApps: true) }
+        if open {
+            // Start as the notch and drop down from it.
+            panel.setFrame(notchFrame(), display: false)
+            panel.orderFrontRegardless()
+            NSApp.activate(ignoringOtherApps: true)
+        }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.28
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -275,16 +266,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
                 self.webView.evaluateJavaScript("document.getElementById('text') && document.getElementById('text').focus()",
                                                 completionHandler: nil)
             } else {
-                self.applyLook(expanded: false)
-                self.panel.orderFrontRegardless()
+                self.panel.orderOut(nil)
             }
         })
     }
 
     @objc func screensChanged() {
-        panel.setFrame(expanded ? expandedFrame() : collapsedFrame(), display: true)
-        applyLook(expanded: expanded)
-        if expanded { layoutContent() }
+        guard expanded else { return }
+        panel.setFrame(expandedFrame(), display: true)
+        layoutContent()
     }
 
     // MARK: - local server
