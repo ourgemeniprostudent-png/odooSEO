@@ -9,6 +9,8 @@ import WebKit
 let port = 8770
 let baseURL = URL(string: "http://127.0.0.1:\(port)/")!
 let jade = NSColor(red: 11 / 255, green: 143 / 255, blue: 107 / 255, alpha: 1)
+// Above the menu bar and its status items, so clicks beside the notch reach us.
+let panelLevel = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
 let supportDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Karnama")
 
@@ -42,12 +44,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     var server: Process?
     var expanded = false
     var animating = false
+    var lastToggle = Date.distantPast
+    var clickMonitors: [Any] = []
 
     let buttonWidth: CGFloat = 34       // the collapsed jade button
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
         buildPanel()
+        watchClicks()
         startServer()
         webView.loadHTMLString(Self.page("در حال آماده‌سازی کارنامه…"), baseURL: nil)
         waitAndLoad(attempt: 0)
@@ -118,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     func buildPanel() {
         let frame = collapsedFrame()
         panel = NotchPanel(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
-        panel.level = .statusBar                  // above the menu bar, next to the notch
+        panel.level = panelLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
@@ -138,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         topStrip.toolTip = "کارنامه"
         topStrip.onClick = { [weak self] in
             guard let self = self else { return }
-            self.setExpanded(!self.expanded)
+            self.toggleFromClick()
         }
         root.addSubview(topStrip)
         applyLook(expanded: false)
@@ -183,6 +188,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
     @objc func collapse() { setExpanded(false) }
 
+    /// One click = one toggle, whichever of the click paths below saw it first.
+    func toggleFromClick() {
+        guard Date().timeIntervalSince(lastToggle) > 0.4 else { return }
+        lastToggle = Date()
+        setExpanded(!expanded)
+    }
+
+    /// Belt and braces for the small button: besides the view's own mouseDown, catch clicks on the
+    /// button whether macOS delivers them to this app (local) or to the menu bar / another app (global).
+    func watchClicks() {
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] event in
+            guard let self = self, event.window === self.panel else { return event }
+            let point = self.topStrip.convert(event.locationInWindow, from: nil)
+            if self.topStrip.bounds.contains(point) {
+                self.toggleFromClick()
+                return nil
+            }
+            return event
+        }) {
+            clickMonitors.append(local)
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] _ in
+            guard let self = self, !self.expanded else { return }
+            if self.panel.frame.insetBy(dx: -6, dy: -6).contains(NSEvent.mouseLocation) {
+                self.toggleFromClick()
+            }
+        }) {
+            clickMonitors.append(global)
+        }
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         if let command = message.body as? String, command == "collapse" { setExpanded(false) }
     }
@@ -191,6 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         guard !animating, open != expanded else { return }
         animating = true
         expanded = open
+        // Never stay locked if an animation's completion is skipped.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.animating = false }
         let target = open ? expandedFrame() : collapsedFrame()
         webView.isHidden = true
         topStrip.autoresizingMask = [.width, .height]
@@ -297,7 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         panel.level = .floating
         NSApp.activate(ignoringOtherApps: true)
         let response = alert.runModal()
-        panel.level = .statusBar
+        panel.level = panelLevel
         panel.makeKeyAndOrderFront(nil)
         return response
     }
