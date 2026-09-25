@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>کارنامه</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>کارنامه</h1>
+  <nav class="daynav">
+    <button id="prevDay" title="روز قبل">‹</button>
+    <button id="todayBtn" class="ghost">امروز</button>
+    <label class="daylabel"><span id="dayTitle"></span><input type="date" id="dayPicker"></label>
+    <button id="nextDay" title="روز بعد">›</button>
+  </nav>
+  <div class="actions">
+    <button id="reportBtn" class="primary">خروجی گزارش</button>
+    <button id="tagsBtn" class="ghost">تگ‌ها</button>
+    <button id="settingsBtn" class="ghost" title="تنظیمات">⚙</button>
+  </div>
+</header>
+
+<main>
+  <section class="composer card">
+    <div class="compose-row">
+      <textarea id="text" rows="3" placeholder="چه کاری انجام دادی؟ بنویس یا دکمهٔ میکروفون را بزن و بگو…"></textarea>
+      <button id="mic" class="mic" title="تایپ صوتی با آوانگار">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2Z"/></svg>
+        <span id="micTime"></span>
+      </button>
+    </div>
+    <div id="voiceStatus" class="voice-status" hidden></div>
+    <div class="compose-meta">
+      <div id="composeTags" class="chips"></div>
+      <div class="compose-end">
+        <label class="minutes">مدت <input id="minutes" type="number" min="0" max="1440" placeholder="دقیقه"></label>
+        <button id="save" class="primary">ثبت کار <kbd>Ctrl+Enter</kbd></button>
+      </div>
+    </div>
+  </section>
+
+  <section class="list-head">
+    <div id="filterTags" class="chips filter"></div>
+    <div id="dayStats" class="muted"></div>
+  </section>
+  <ol id="entries" class="entries"></ol>
+  <p id="empty" class="empty" hidden>هنوز کاری برای این روز ثبت نشده.</p>
+</main>
+
+<dialog id="reportDlg" class="dlg wide">
+  <form method="dialog" class="dlg-head"><h2>خروجی گزارش</h2><button class="x">×</button></form>
+  <div class="report-opts">
+    <label>از <input type="date" id="rFrom"></label>
+    <label>تا <input type="date" id="rTo"></label>
+    <div class="quick">
+      <button data-range="today" class="ghost sm">امروز</button>
+      <button data-range="week" class="ghost sm">این هفته</button>
+      <button data-range="month" class="ghost sm">این ماه</button>
+    </div>
+  </div>
+  <div id="rTags" class="chips"></div>
+  <div class="report-opts">
+    <label class="check"><input type="checkbox" id="rTime"> ساعت ثبت</label>
+    <label class="check"><input type="checkbox" id="rMinutes" checked> مدت کار</label>
+    <label class="check"><input type="checkbox" id="rFaDigits" checked> اعداد فارسی</label>
+    <label class="check"><input type="checkbox" id="rUntagged"> کارهای بدون تگ</label>
+  </div>
+  <textarea id="rOut" class="report-out" rows="16" readonly></textarea>
+  <div class="dlg-foot">
+    <span id="rInfo" class="muted"></span>
+    <button id="rCopy" class="primary">کپی متن</button>
+  </div>
+</dialog>
+
+<dialog id="tagsDlg" class="dlg">
+  <form method="dialog" class="dlg-head"><h2>تگ‌ها</h2><button class="x">×</button></form>
+  <form id="newTag" class="newtag">
+    <input id="newTagName" placeholder="نام تگ، مثلاً فراتر" maxlength="60" required>
+    <input id="newTagColor" type="color" value="#1d6d5a">
+    <button class="primary">افزودن</button>
+  </form>
+  <ul id="tagList" class="taglist"></ul>
+</dialog>
+
+<dialog id="settingsDlg" class="dlg">
+  <form method="dialog" class="dlg-head"><h2>تنظیمات</h2><button class="x">×</button></form>
+  <form id="settingsForm" class="settings">
+    <label>توکن آوانگار (gateway-token)
+      <input id="sToken" type="password" autocomplete="off" placeholder="برای تغییر وارد کنید">
+      <small id="sTokenState" class="muted"></small>
+    </label>
+    <label>نام شما در بالای گزارش (اختیاری)
+      <input id="sName" maxlength="120">
+    </label>
+    <label>اتصال مستقیم آوانگار وقتی VPN روشن است (فقط مک)
+      <select id="sIface">
+        <option value="">عادی (از مسیر پیش‌فرض)</option>
+        <option value="en0">وای‌فای مک (en0)</option>
+        <option value="en1">en1</option>
+      </select>
+    </label>
+    <button class="primary">ذخیره</button>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
