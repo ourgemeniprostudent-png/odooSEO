@@ -8,7 +8,19 @@ NAME="کارنامه"
 SUPPORT="$HOME/Library/Application Support/Karnama"
 
 step() { print -P "%F{green}●%f $1"; }
-fail() { print -P "%F{red}✗ $1%f"; if [[ -t 0 ]]; then print "برای بستن Enter بزنید."; read; fi; exit 1; }
+fail() {
+  print -P "%F{red}✗ $1%f"
+  if [[ -t 0 ]]; then
+    print "برای بستن Enter بزنید."; read
+  else
+    # Run by the in-app updater (no terminal): say so on screen instead of failing silently.
+    osascript -e 'on run argv' \
+      -e 'display dialog (item 1 of argv) buttons {"باشه"} default button 1 with title "کارنامه" with icon caution' \
+      -e 'end run' "به‌روزرسانی کارنامه انجام نشد: $1
+جزئیات در ~/Library/Application Support/Karnama/update.log" >/dev/null 2>&1 || true
+  fi
+  exit 1
+}
 
 cd "$SRC"
 step "شروع نصب کارنامه…"

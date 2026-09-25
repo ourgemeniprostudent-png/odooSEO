@@ -14,6 +14,18 @@ let panelLevel = NSWindow.Level(rawValue: NSWindow.Level.mainMenu.rawValue + 3)
 let supportDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Karnama")
 
+/// Short diagnostic log (~/Library/Application Support/Karnama/app.log), rewritten each launch.
+let appLog = supportDir.appendingPathComponent("app.log")
+func diag(_ line: String) {
+    let stamp = ISO8601DateFormatter().string(from: Date())
+    guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
+    if let handle = try? FileHandle(forWritingTo: appLog) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        handle.closeFile()
+    }
+}
+
 // Borderless panels refuse keyboard focus by default; the text box needs it.
 final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -27,7 +39,10 @@ final class ClickView: NSView {
     var onClick: (() -> Void)?
     // Without this the first click on an inactive app only activates it and is swallowed.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        diag("click: button view")
+        onClick?()
+    }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
 }
 
@@ -50,6 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     let buttonWidth: CGFloat = 34       // the collapsed jade button
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: appLog.path, contents: nil)
+        let version = (try? String(contentsOfFile: (Bundle.main.resourcePath ?? "") + "/VERSION", encoding: .utf8)) ?? "?"
+        let screen = targetScreen()
+        diag("launch version=\(version.trimmingCharacters(in: .whitespacesAndNewlines).prefix(7)) screen=\(screen.frame) notch=\(notchSize(screen)) button=\(collapsedFrame())")
         buildMenu()
         buildPanel()
         watchClicks()
@@ -202,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
             guard let self = self, event.window === self.panel else { return event }
             let point = self.topStrip.convert(event.locationInWindow, from: nil)
             if self.topStrip.bounds.contains(point) {
+                diag("click: local monitor")
                 self.toggleFromClick()
                 return nil
             }
@@ -212,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] _ in
             guard let self = self, !self.expanded else { return }
             if self.panel.frame.insetBy(dx: -6, dy: -6).contains(NSEvent.mouseLocation) {
+                diag("click: global monitor at \(NSEvent.mouseLocation)")
                 self.toggleFromClick()
             }
         }) {
@@ -224,7 +246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     }
 
     func setExpanded(_ open: Bool) {
-        guard !animating, open != expanded else { return }
+        guard !animating, open != expanded else {
+            diag("toggle ignored open=\(open) expanded=\(expanded) animating=\(animating)")
+            return
+        }
+        diag(open ? "expand" : "collapse")
         animating = true
         expanded = open
         // Never stay locked if an animation's completion is skipped.
