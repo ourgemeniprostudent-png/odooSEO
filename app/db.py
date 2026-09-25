@@ -76,11 +76,11 @@ def init():
             if col not in have:
                 c.execute(sql)
         c.execute("CREATE INDEX IF NOT EXISTS entries_kind_day ON entries(kind, day)")
-    audio_dir().mkdir(exist_ok=True)
     os.chmod(path(), 0o600)
 
 
 def audio_dir():
+    """Where older versions kept voice recordings; removed on start."""
     return DATA / "audio"
 
 

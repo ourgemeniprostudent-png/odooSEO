@@ -60,10 +60,9 @@ def test_rejects_foreign_origin(client):
 
 def test_transcribe_without_token(client):
     r = client.post("/api/transcribe", files={"audio": ("v.webm", b"123", "audio/webm")})
-    detail = r.json()["detail"]
-    assert r.status_code == 502 and "توکن" in detail["message"]
-    # the recording is kept so it can be retried or played back
-    assert (db_module().audio_dir() / detail["audio"]).is_file()
+    assert r.status_code == 502 and "توکن" in r.json()["detail"]
+    # recordings are never written to disk
+    assert not db_module().audio_dir().exists()
 
 
 def test_transcribe_polls_avanegar(client, monkeypatch):
@@ -84,13 +83,8 @@ def test_transcribe_polls_avanegar(client, monkeypatch):
     monkeypatch.setattr(avanegar, "to_mp3", lambda d: None)
     monkeypatch.setattr(avanegar.asyncio, "sleep", no_sleep)
     r = client.post("/api/transcribe", files={"audio": ("v.webm", b"123", "audio/webm")})
-    body = r.json()
-    assert body["text"] == "امروز سایت را به‌روز کردم"
-    assert client.get(f"/api/audio/{body['audio']}").content == b"123"
-    e = client.post("/api/entries", json={"text": body["text"], "audio": [body["audio"], "../x.webm"]}).json()
-    assert e["audio"] == [body["audio"]]
-    client.delete(f"/api/entries/{e['id']}")
-    assert client.get(f"/api/audio/{body['audio']}").status_code == 404
+    assert r.json() == {"text": "امروز سایت را به‌روز کردم"}
+    assert not db.audio_dir().exists()
     assert calls[0][2] == {"gateway-token": "tok"} and calls[1][1].endswith("getResult")
 
 
@@ -163,7 +157,22 @@ def test_migrates_old_database(tmp_path, monkeypatch):
     importlib.reload(main)
     c = TestClient(main.app)
     d = c.get("/api/day/2026-09-25").json()
-    assert d["done"][0]["text"] == "قدیمی" and d["done"][0]["audio"] == []
+    assert d["done"][0]["text"] == "قدیمی" and "audio" not in d["done"][0]
+
+
+def test_old_recordings_are_deleted(tmp_path, monkeypatch):
+    monkeypatch.setenv("KARNAMA_DATA", str(tmp_path))
+    from app import db, main
+    importlib.reload(db)
+    db.init()
+    (tmp_path / "audio").mkdir()
+    (tmp_path / "audio" / "abc.webm").write_bytes(b"x" * 100)
+    with db.conn() as c:
+        c.execute("INSERT INTO entries(text,day,audio,created_at,updated_at) VALUES('x','2026-09-25','[\"abc.webm\"]','t','t')")
+    importlib.reload(main)
+    assert not (tmp_path / "audio").exists()
+    with db.conn() as c:
+        assert c.execute("SELECT audio FROM entries").fetchone()["audio"] == "[]"
 
 
 def test_extract_speech_shapes():

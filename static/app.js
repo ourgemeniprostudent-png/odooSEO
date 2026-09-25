@@ -1,6 +1,8 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
+// Opened inside the Mac app's notch panel (narrow layout).
+if (/[?&]shell=notch\b/.test(location.search)) document.documentElement.classList.add("in-notch");
 const state = {
   day: isoDay(new Date()),
   followToday: true,        // on today's page → move to the new day after midnight
@@ -10,7 +12,6 @@ const state = {
   filter: "all",            // "all" | "none" | tag id
   composeTags: new Set(loadJSON("karnama.composeTags", [])),
   voiceUsed: false,
-  pendingAudio: [],
   settings: {},
 };
 
@@ -242,7 +243,6 @@ function entryHTML(e) {
       ${tags.map((t) => chip(t, true, 'data-act="tags"')).join("")}
       ${tags.length ? `<button class="chip add" data-act="tags">± تگ</button>` : `<button class="untagged" data-act="tags">+ تگ بزن</button>`}
       ${e.minutes ? `<span class="dur">⏱ ${toFa(duration(e.minutes))}</span>` : ""}
-      ${e.audio.map((a, i) => `<button class="audio-btn" data-act="play" data-audio="${a}">▶ صدا${e.audio.length > 1 ? " " + toFa(i + 1) : ""}</button>`).join("")}
       ${extra.join("")}
     </div>
   </li>`;
@@ -305,9 +305,9 @@ async function saveEntry() {
   try {
     await api("POST", "/api/entries", {
       text, kind: state.tab, day: state.day, minutes, tag_ids: [...state.composeTags],
-      source: state.voiceUsed ? "voice" : "text", audio: state.pendingAudio,
+      source: state.voiceUsed ? "voice" : "text",
     });
-    $("#text").value = ""; $("#minutes").value = ""; state.voiceUsed = false; state.pendingAudio = [];
+    $("#text").value = ""; $("#minutes").value = ""; state.voiceUsed = false;
     setVoiceStatus("");
     await loadDay(); render(); toast(state.tab === "done" ? "ثبت شد" : "به تسک‌ها اضافه شد");
   } catch (e) { toast(e.message, true); }
@@ -358,9 +358,8 @@ function stopRec(cancel = false) {
   voice.rec.stop();
   voice.stream.getTracks().forEach((t) => t.stop());
 }
-function insertTranscript(text, audio) {
-  if (!state.pendingAudio.includes(audio)) state.pendingAudio.push(audio);
-  if (!text) throw new ApiError("متنی از صدا تشخیص داده نشد.", { audio });
+function insertTranscript(text) {
+  if (!text) throw new ApiError("متنی از صدا تشخیص داده نشد.");
   const ta = $("#text");
   ta.value = ta.value.trim() ? ta.value.trimEnd() + " " + text : text;
   state.voiceUsed = true;
@@ -368,16 +367,17 @@ function insertTranscript(text, audio) {
   ta.focus();
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
-async function runTranscribe(call) {
+// The recording lives only in memory: kept for a retry if Avanegar fails, dropped after success.
+async function transcribeForm(fd) {
   $("#mic").classList.add("busy"); $("#mic").disabled = true;
   setVoiceStatus("آوانگار در حال تبدیل صدا به متن…");
   try {
-    const { text, audio } = await call();
-    insertTranscript(text, audio);
+    const { text } = await api("POST", "/api/transcribe", fd);
+    insertTranscript(text);
+    voice.failed = null;
   } catch (e) {
-    const audio = e.extra && e.extra.audio;
-    if (audio && !state.pendingAudio.includes(audio)) state.pendingAudio.push(audio);
-    setVoiceStatus(e.message + (audio ? " صدا ذخیره شده است." : ""), true, audio || "");
+    voice.failed = fd;
+    setVoiceStatus(e.message, true, "1");
   } finally {
     $("#mic").classList.remove("busy"); $("#mic").disabled = false;
   }
@@ -387,30 +387,17 @@ async function sendRec() {
   if (voice.cancel) return setVoiceStatus("");
   const type = (rec.mimeType || "audio/webm").split(";")[0];
   const blob = new Blob(voice.chunks, { type });
+  voice.chunks = [];
   if (blob.size < 1000) return setVoiceStatus("صدایی ضبط نشد.", true);
   const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
   const fd = new FormData();
   fd.append("audio", blob, `voice.${ext}`);
-  await runTranscribe(() => api("POST", "/api/transcribe", fd));
+  await transcribeForm(fd);
 }
 $("#voiceStatus").addEventListener("click", (e) => {
-  const name = e.target.dataset.retry;
-  if (name) runTranscribe(() => api("POST", `/api/transcribe/${name}`));
+  if (e.target.dataset.retry && voice.failed) transcribeForm(voice.failed);
 });
 $("#mic").addEventListener("click", () => (voice.rec ? stopRec() : startRec()));
-
-let player = null;
-function play(btn, name) {
-  if (player && player.dataset.name === name && !player.paused) {
-    player.pause(); btn.textContent = btn.textContent.replace("❚❚", "▶"); return;
-  }
-  if (player) player.pause();
-  document.querySelectorAll(".audio-btn").forEach((b) => (b.textContent = b.textContent.replace("❚❚", "▶")));
-  player = new Audio(`/api/audio/${name}`);
-  player.dataset.name = name;
-  player.onended = () => (btn.textContent = btn.textContent.replace("❚❚", "▶"));
-  player.play().then(() => (btn.textContent = btn.textContent.replace("▶", "❚❚"))).catch(() => toast("پخش صدا ممکن نشد", true));
-}
 
 // ---------- list interactions ----------
 $("#filterTags").addEventListener("click", (e) => {
@@ -440,8 +427,6 @@ async function onEntryClick(ev) {
       return editEntry(li, entry);
     } else if (act === "tags") {
       return openTagPicker(b, entry);
-    } else if (act === "play") {
-      return play(b, b.dataset.audio);
     }
     await loadDay(); render();
   } catch (e) { toast(e.message, true); }

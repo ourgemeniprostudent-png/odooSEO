@@ -1,4 +1,6 @@
-// کارنامه — native macOS shell: starts the local Python server and shows it in a WebKit window.
+// کارنامه — native macOS shell that lives at the camera notch.
+// Collapsed: a small black strip hugging the notch. Click it and the panel drops down with the app;
+// the «جمع کردن» button at the bottom slides it back up. Also starts the local Python server.
 // Built on the user's Mac by install-mac.command with:  swiftc -O -o Karnama Karnama.swift
 
 import Cocoa
@@ -10,44 +12,219 @@ let jade = NSColor(red: 11 / 255, green: 143 / 255, blue: 107 / 255, alpha: 1)
 let supportDir = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/Application Support/Karnama")
 
+// Borderless panels refuse keyboard focus by default; the text box needs it.
+final class NotchPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
+// A view whose clicks fall through to a handler (the whole collapsed strip is one button).
+final class ClickView: NSView {
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate {
-    var window: NSWindow!
+    var panel: NotchPanel!
+    var root: NSView!
+    var topStrip: ClickView!
+    var iconView: NSImageView!
+    var titleLabel: NSTextField!
     var webView: WKWebView!
+    var footer: NSView!
     var server: Process?
+    var expanded = false
+    var animating = false
+
+    let earWidth: CGFloat = 70          // black area on each side of the notch when collapsed
+    let expandedWidth: CGFloat = 520
+    let footerHeight: CGFloat = 44
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
+        buildPanel()
+        startServer()
+        webView.loadHTMLString(Self.page("در حال آماده‌سازی کارنامه…"), baseURL: nil)
+        waitAndLoad(attempt: 0)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screensChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        // Opening the app opens the panel.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.setExpanded(true) }
+    }
 
+    // Clicking the Dock icon toggles the panel.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        setExpanded(!expanded)
+        return false
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        server?.terminate()
+    }
+
+    // MARK: - notch geometry
+
+    /// The built-in screen with the notch if there is one, otherwise the main screen.
+    func targetScreen() -> NSScreen {
+        if #available(macOS 12.0, *) {
+            if let notched = NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 }) {
+                return notched
+            }
+        }
+        return NSScreen.main ?? NSScreen.screens[0]
+    }
+
+    /// Height of the notch (or menu bar) and width of the notch (0 when there is none).
+    func notchSize(_ screen: NSScreen) -> (height: CGFloat, width: CGFloat) {
+        if #available(macOS 12.0, *), screen.safeAreaInsets.top > 0 {
+            var width: CGFloat = 200
+            if let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
+                width = screen.frame.width - left.width - right.width
+            }
+            return (screen.safeAreaInsets.top, width)
+        }
+        let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
+        return (menuBar > 0 ? menuBar : 24, 0)
+    }
+
+    func collapsedFrame() -> NSRect {
+        let screen = targetScreen()
+        let notch = notchSize(screen)
+        let width = max(notch.width, 90) + earWidth * 2
+        return NSRect(x: screen.frame.midX - width / 2, y: screen.frame.maxY - notch.height,
+                      width: width, height: notch.height)
+    }
+
+    func expandedFrame() -> NSRect {
+        let screen = targetScreen()
+        let height = min(780, screen.frame.height - 40)
+        return NSRect(x: screen.frame.midX - expandedWidth / 2, y: screen.frame.maxY - height,
+                      width: expandedWidth, height: height)
+    }
+
+    // MARK: - panel
+
+    func buildPanel() {
+        let frame = collapsedFrame()
+        panel = NotchPanel(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.level = .statusBar                  // above the menu bar, next to the notch
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        panel.isFloatingPanel = true
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+
+        root = NSView(frame: NSRect(origin: .zero, size: frame.size))
+        root.wantsLayer = true
+        root.layer?.backgroundColor = NSColor.black.cgColor
+        root.layer?.cornerRadius = 12
+        root.layer?.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]   // bottom corners
+        root.layer?.masksToBounds = true
+        panel.contentView = root
+
+        // Top strip: the part that sits beside the notch. Icon on the left ear, name on the right.
+        let stripHeight = frame.height
+        topStrip = ClickView(frame: NSRect(x: 0, y: 0, width: frame.width, height: stripHeight))
+        topStrip.autoresizingMask = [.width, .minYMargin]
+        topStrip.onClick = { [weak self] in
+            guard let self = self else { return }
+            self.setExpanded(!self.expanded)
+        }
+        root.addSubview(topStrip)
+
+        let iconSize = min(stripHeight - 8, 22)
+        iconView = NSImageView(frame: NSRect(x: 18, y: (stripHeight - iconSize) / 2, width: iconSize, height: iconSize))
+        iconView.image = NSApp.applicationIconImage
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.autoresizingMask = [.maxXMargin]
+        topStrip.addSubview(iconView)
+
+        titleLabel = NSTextField(labelWithString: "کارنامه")
+        titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.textColor = NSColor(red: 0.55, green: 0.9, blue: 0.76, alpha: 1)
+        titleLabel.alignment = .right
+        titleLabel.sizeToFit()
+        let labelWidth = titleLabel.frame.width + 4
+        titleLabel.frame = NSRect(x: frame.width - labelWidth - 16, y: (stripHeight - titleLabel.frame.height) / 2,
+                                  width: labelWidth, height: titleLabel.frame.height)
+        titleLabel.autoresizingMask = [.minXMargin]
+        topStrip.addSubview(titleLabel)
+
+        // Web content (hidden while collapsed).
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore.default()
         webView = WKWebView(frame: .zero, configuration: config)
         webView.uiDelegate = self
         webView.navigationDelegate = self
+        webView.wantsLayer = true
+        webView.layer?.cornerRadius = 12
+        webView.layer?.masksToBounds = true
+        webView.isHidden = true
+        root.addSubview(webView)
 
-        window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 820),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered, defer: false)
-        window.title = "کارنامه"
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.backgroundColor = jade
-        window.minSize = NSSize(width: 420, height: 520)
-        window.contentView = webView
-        window.center()
-        window.setFrameAutosaveName("KarnamaMainWindow")
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Footer with the collapse button.
+        footer = NSView(frame: .zero)
+        footer.isHidden = true
+        let button = NSButton(title: "⌃  جمع کردن", target: self, action: #selector(collapse))
+        button.isBordered = false
+        button.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        button.contentTintColor = NSColor(red: 0.55, green: 0.9, blue: 0.76, alpha: 1)
+        button.frame = NSRect(x: 0, y: 0, width: expandedWidth, height: footerHeight)
+        button.autoresizingMask = [.width, .height]
+        footer.addSubview(button)
+        root.addSubview(footer)
 
-        webView.loadHTMLString(Self.page("در حال آماده‌سازی کارنامه…"), baseURL: nil)
-        startServer()
-        waitAndLoad(attempt: 0)
+        panel.orderFrontRegardless()
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func layoutContent() {
+        let size = root.bounds.size
+        let strip = topStrip.frame.height
+        footer.frame = NSRect(x: 0, y: 0, width: size.width, height: footerHeight)
+        webView.frame = NSRect(x: 8, y: footerHeight, width: size.width - 16,
+                               height: max(0, size.height - strip - footerHeight))
+    }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        server?.terminate()
+    @objc func collapse() { setExpanded(false) }
+
+    func setExpanded(_ open: Bool) {
+        guard !animating, open != expanded else { return }
+        animating = true
+        expanded = open
+        let target = open ? expandedFrame() : collapsedFrame()
+        webView.isHidden = true
+        footer.isHidden = true
+        root.layer?.cornerRadius = open ? 22 : 12
+        if open { NSApp.activate(ignoringOtherApps: true) }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.28
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(target, display: true)
+        }, completionHandler: {
+            self.animating = false
+            if self.expanded {
+                self.layoutContent()
+                self.webView.isHidden = false
+                self.footer.isHidden = false
+                self.panel.makeKeyAndOrderFront(nil)
+                self.panel.makeFirstResponder(self.webView)
+                self.webView.evaluateJavaScript("document.getElementById('text') && document.getElementById('text').focus()",
+                                                completionHandler: nil)
+            } else {
+                self.panel.orderFrontRegardless()
+            }
+        })
+    }
+
+    @objc func screensChanged() {
+        panel.setFrame(expanded ? expandedFrame() : collapsedFrame(), display: true)
+        if expanded { layoutContent() }
     }
 
     // MARK: - local server
@@ -87,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         URLSession.shared.dataTask(with: request) { _, response, _ in
             DispatchQueue.main.async {
                 if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                    self.webView.load(URLRequest(url: baseURL))
+                    self.webView.load(URLRequest(url: URL(string: "?shell=notch", relativeTo: baseURL)!))
                 } else if attempt < 120 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                         self.waitAndLoad(attempt: attempt + 1)
@@ -104,7 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
     static func page(_ message: String) -> String {
         return """
         <html dir="rtl"><body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
-        background:#0b8f6b;color:#fff;font:17px -apple-system,Tahoma,sans-serif;text-align:center;line-height:2">
+        background:#0b8f6b;color:#fff;font:15px -apple-system,Tahoma,sans-serif;text-align:center;line-height:2">
         <div>\(message)</div></body></html>
         """
     }
@@ -119,12 +296,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         decisionHandler(origin.host == "127.0.0.1" ? .grant : .deny)
     }
 
+    /// Alerts are normal windows; drop the panel below them while one is showing.
+    func runAlert(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        panel.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        panel.level = .statusBar
+        panel.makeKeyAndOrderFront(nil)
+        return response
+    }
+
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         let alert = NSAlert()
         alert.messageText = message
         alert.addButton(withTitle: "باشه")
-        alert.beginSheetModal(for: window) { _ in completionHandler() }
+        _ = runAlert(alert)
+        completionHandler()
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
@@ -133,9 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         alert.messageText = message
         alert.addButton(withTitle: "بله")
         alert.addButton(withTitle: "انصراف")
-        alert.beginSheetModal(for: window) { response in
-            completionHandler(response == .alertFirstButtonReturn)
-        }
+        completionHandler(runAlert(alert) == .alertFirstButtonReturn)
     }
 
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
@@ -150,9 +336,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         alert.addButton(withTitle: "تأیید")
         alert.addButton(withTitle: "انصراف")
         alert.window.initialFirstResponder = field
-        alert.beginSheetModal(for: window) { response in
-            completionHandler(response == .alertFirstButtonReturn ? field.stringValue : nil)
-        }
+        let response = runAlert(alert)
+        completionHandler(response == .alertFirstButtonReturn ? field.stringValue : nil)
     }
 
     // Links to other sites open in the default browser, not inside the app.
@@ -198,20 +383,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
 
         let viewItem = NSMenuItem()
         let view = NSMenu(title: "نما")
+        view.addItem(withTitle: "باز / جمع کردن", action: #selector(togglePanel), keyEquivalent: "k")
         view.addItem(withTitle: "بارگذاری دوباره", action: #selector(reloadPage), keyEquivalent: "r")
         view.addItem(withTitle: "باز کردن در مرورگر", action: #selector(openInBrowser), keyEquivalent: "b")
         viewItem.submenu = view
         main.addItem(viewItem)
 
-        let windowItem = NSMenuItem()
-        let windowMenu = NSMenu(title: "پنجره")
-        windowMenu.addItem(withTitle: "کوچک کردن", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "بستن", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        windowItem.submenu = windowMenu
-        main.addItem(windowItem)
-
         NSApp.mainMenu = main
     }
+
+    @objc func togglePanel() { setExpanded(!expanded) }
 
     @objc func reloadPage() { webView.reload() }
 
